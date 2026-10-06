@@ -194,28 +194,9 @@ void Dialog_deineTopbarItem::on_btn_cancel_clicked()
 
 void Dialog_deineTopbarItem::on_btn_save_clicked()
 {
-    /* editedSchema = TopbarItemDefinitionSchema(static_cast<ValueID>(ui->combo_primaryData->currentData().toInt()),
-                                              //getItemType(), ui->frame_primaryColor->palette().background().color());
-                                              getItemBackgroundColor(getItemType(), ui->frame_primaryColor->palette().color(QPalette::Window));
+    editedSchema = TopbarItemDefinitionSchema(static_cast<ValueID>(ui->combo_primaryData->currentData().toInt()),
+        getItemType(), ui->frame_primaryColor->palette().color(QPalette::Window));
 
-    if (!ui->combo_secondaryData->currentText().isEmpty() && ui->combo_secondaryData->isEnabled()) {
-        editedSchema.setSecondaryValueId(static_cast<ValueID>(ui->combo_secondaryData->currentData().toInt()));
-        editedSchema.setSecondaryColor(ui->frame_secondaryColor->palette().background().color());
-    } */
-
-// Declaration of ItemType (replace with your actual type definition)
-    enum class ItemType;
-    
-    // Declaration of the getItemBackgroundColor function
-    QColor getItemBackgroundColor(ItemType type, const QColor& defaultColor);
-    
-    //ItemType type = getItemType();
-    TopbarItemType type = getItemType();
-    // FIX ME!
-    ValueID primaryDataValue = static_cast<ValueID>(ui->combo_primaryData->currentData().toInt());
-    //editedSchema = TopbarItemDefinitionSchema(primaryDataValue, getItemBackgroundColor(type, ui->frame_primaryColor->palette().color(QPalette::Window)));
-
-    
     if (!ui->combo_secondaryData->currentText().isEmpty() && ui->combo_secondaryData->isEnabled()) {
         editedSchema.setSecondaryValueId(static_cast<ValueID>(ui->combo_secondaryData->currentData().toInt()));
         editedSchema.setSecondaryColor(ui->frame_secondaryColor->palette().color(QPalette::Window));

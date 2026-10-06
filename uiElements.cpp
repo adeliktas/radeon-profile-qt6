@@ -6,6 +6,7 @@
 #include "ui_radeon_profile.h"
 
 #include <QMenu>
+#include "components/fancurvechart.h"
 
 void radeon_profile::setupTrayIcon() {
     QMenu *menu_tray = new QMenu(this);
@@ -48,6 +49,8 @@ QMenu* radeon_profile::createGeneralMenu() {
     menu_general->addAction(pause);
     menu_general->addSeparator();
     menu_general->addAction(resetTemp);
+    menu_general->addSeparator();
+    menu_general->addAction(tr("Enable privileged controls…"), this, &radeon_profile::enablePrivilegedControls);
 
     return menu_general;
 }
@@ -243,7 +246,13 @@ void radeon_profile::createPowerProfileControlButtons(const PowerProfiles &modes
 
 void radeon_profile::createFanProfileGraph()
 {
-    chartView_fan = new QChartView(this);
+    delete chartView_fan;
+    auto *view = new FanCurveChart(ui->list_fanSteps, this);
+    chartView_fan = view;
+    connect(view, &FanCurveChart::curveEdited, this, [this] {
+        markFanProfileUnsaved(true);
+        makeFanProfilePlot();
+    });
     QChart *chart_fan = new QChart();
     chartView_fan->setRenderHint(QPainter::Antialiasing);
     chartView_fan->setChart(chart_fan);
@@ -256,12 +265,12 @@ void radeon_profile::createFanProfileGraph()
     QValueAxis *axis_speed = new QValueAxis(chart_fan);
     chart_fan->addAxis(axis_temperature,Qt::AlignBottom);
     chart_fan->addAxis(axis_speed, Qt::AlignLeft);
-    axis_temperature->setRange(0, 100);
+    axis_temperature->setRange(minFanStepTemperature, maxFanStepTemperature);
     axis_speed->setRange(0, 100);
 
     setupAxis(axis_speed, Qt::white, tr("Fan Speed [%]"), 11);
-    setupAxis(axis_temperature, Qt::white, tr("Temperature [°C]"), 11);
-    setupSeries(static_cast<QLineSeries*>(chart_fan->series()[0]) , Qt::yellow, "", axis_speed, axis_temperature);
+    setupAxis(axis_temperature, Qt::white, tr("Temperature [°C]"), 13);
+    setupSeries(static_cast<QLineSeries*>(chart_fan->series()[0]) , Qt::yellow, "", axis_temperature, axis_speed);
 
     ui->verticalLayout_22->addWidget(chartView_fan);
 }

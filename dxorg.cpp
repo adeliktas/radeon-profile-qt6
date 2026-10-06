@@ -52,9 +52,9 @@ dXorg::InitializationConfig dXorg::getInitConfig() {
 
 void dXorg::setupIoctl() {
     if (features.sysInfo.module == DriverModule::RADEON)
-        ioctlHnd = new radeonIoctlHandler(features.sysInfo.sysName[4].toLatin1() - '0');
+        ioctlHnd = new radeonIoctlHandler(features.sysInfo.sysName.mid(4).toUInt());
     else if (features.sysInfo.module == DriverModule::AMDGPU)
-        ioctlHnd = new amdgpuIoctlHandler(features.sysInfo.sysName[4].toLatin1() - '0');
+        ioctlHnd = new amdgpuIoctlHandler(features.sysInfo.sysName.mid(4).toUInt());
 }
 
 QString getValueFromSysFsFile(QString fileName) {
@@ -121,13 +121,12 @@ void dXorg::sendSharedMemInfoToDaemon() {
 void dXorg::figureOutGpuDataFilePaths(const QString &gpuName) {
     QString devicePath = "/sys/class/drm/" + gpuName + "/device/";
     driverFiles.moduleParams = devicePath + "driver/module/parameters/";
-    driverFiles.debugfs_pm_info = "/sys/kernel/debug/dri/" + gpuName.right(1) + "/"+features.sysInfo.driverModuleString + "_pm_info"; // this path contains only index
+    driverFiles.debugfs_pm_info = "/sys/kernel/debug/dri/" + gpuName.mid(4) + "/" + features.sysInfo.driverModuleString + "_pm_info";
     driverFiles.sysFs = DeviceSysFs(devicePath);
 
     // look for hwmon devices in card dir
-    QString hwmonDevicePath = globalStuff::grabSystemInfo("ls "+ devicePath + "hwmon/")[0];
-
-    hwmonDevicePath =  devicePath + "hwmon/" + ((hwmonDevicePath.isEmpty() ? "hwmon0/" : hwmonDevicePath + "/"));
+    const QString hwmon = QDir(devicePath + "hwmon").entryList({"hwmon*"}, QDir::Dirs | QDir::NoDotAndDotDot).value(0, "hwmon0");
+    const QString hwmonDevicePath = devicePath + "hwmon/" + hwmon + "/";
 
     driverFiles.hwmonAttributes = HwmonAttributes(hwmonDevicePath);
 
@@ -282,7 +281,7 @@ float dXorg::getTemperature() {
     switch (features.currentTemperatureSensor) {
         case TemperatureSensor::SYSFS_HWMON:
         case TemperatureSensor::CARD_HWMON:
-            return getValueFromSysFsFile(driverFiles.hwmonAttributes.temp1).toFloat() / 1000;
+            return readHwmonTemperature(driverFiles.hwmonAttributes.temp1);
         case TemperatureSensor::PCI_SENSOR: {
             QStringList out = globalStuff::grabSystemInfo("sensors");
             temp = out[sensorsGPUtempIndex+2].split(" ",Qt::SkipEmptyParts)[1].remove("+").remove("C").remove("°");

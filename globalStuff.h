@@ -10,6 +10,10 @@
 #include <QProcessEnvironment>
 #include <QStringList>
 #include <QFile>
+#include <QDir>
+#include <QStandardPaths>
+#include <QtEndian>
+#include <iterator>
 #include <QMap>
 #include <QDebug>
 
@@ -68,7 +72,8 @@ enum ValueID {
     FAN_SPEED_RPM,
     POWER_LEVEL,
     POWER_CAP_SELECTED,
-    POWER_CAP_AVERAGE
+    POWER_CAP_AVERAGE,
+    TEMPERATURE_HOTSPOT
 };
 
 enum ValueUnit {
@@ -109,12 +114,12 @@ enum class TemperatureSensor {
 };
 
 struct GPUSysInfo {
-    QString sysName, driverModuleString, name;
+    QString sysName, driverModuleString, name, pciSlot;
     DriverModule module;
 };
 
 struct RPValue {
-    ValueUnit unit;
+    ValueUnit unit = NONE;
     float value;
     QString strValue;
 
@@ -200,6 +205,26 @@ typedef QMap<QString, FVTable> MapFVTables;
 typedef QMap<QString, OCRange> MapOCRanges;
 typedef QMap<int, unsigned int> FanProfileSteps;
 typedef QList<PowerProfileDefinition> PowerProfiles;
+
+inline unsigned fanSpeedAtTemperature(const FanProfileSteps &steps, float temperature) {
+    if (temperature <= steps.firstKey())
+        return steps.first();
+    if (temperature >= steps.lastKey())
+        return steps.last();
+    const auto high = steps.upperBound(temperature);
+    const auto low = std::prev(high);
+    return low.value() + (high.value() - float(low.value()))
+        * (temperature - low.key()) / (high.key() - low.key());
+}
+
+inline float readHwmonTemperature(const QString &path) {
+    QFile file(path);
+    if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
+        return -1;
+    bool ok;
+    const float value = QString::fromLatin1(file.readAll()).trimmed().toFloat(&ok);
+    return ok && value >= 0 && value <= 200000 ? value / 1000 : -1;
+}
 
 struct OCProfile {
     unsigned powerCap;
@@ -328,6 +353,7 @@ struct HwmonAttributes {
     QString
     temp1,
     temp1_crit,
+    hotspot,
     pwm1,
     pwm1_enable,
     pwm1_max,
@@ -342,6 +368,13 @@ struct HwmonAttributes {
     HwmonAttributes(const QString &hwmonPath) {
         temp1 = hwmonPath + "temp1_input";
         temp1_crit = hwmonPath + "temp1_crit";
+        for (const QString &label : QDir(hwmonPath).entryList({"temp*_label"}, QDir::Files)) {
+            QFile file(QDir(hwmonPath).filePath(label));
+            if (file.open(QIODevice::ReadOnly) && file.readAll().trimmed().toLower() == "junction") {
+                hotspot = QDir(hwmonPath).filePath(label.chopped(6) + "_input");
+                break;
+            }
+        }
         pwm1 = hwmonPath + "pwm1";
         pwm1_enable = hwmonPath + "pwm1_enable";
         pwm1_max = hwmonPath + "pwm1_max";
@@ -395,47 +428,56 @@ struct GPUConstParams {
 
 class globalStuff {
 public:
+    static bool validEdid(const QByteArray &data) {
+        return data.size() >= 128 && data.startsWith(QByteArray::fromHex("00ffffffffffff00"));
+    }
+
+    static quint64 xrandrPropertyValue(const void *data, int format) {
+        if (!data)
+            return 0;
+        switch (format) {
+            case 8: return qFromUnaligned<quint8>(data);
+            case 16: return qFromUnaligned<quint16>(data);
+            case 32: return qFromUnaligned<unsigned long>(data); // Xlib stores format-32 items as native longs.
+            default: return 0;
+        }
+    }
+
+    static QString renderNodeForDevice(const QString &deviceDrmPath) {
+        for (const QString &node : QDir(deviceDrmPath).entryList({"renderD*"}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+            bool ok;
+            node.mid(7).toUInt(&ok);
+            if (ok)
+                return "/dev/dri/" + node;
+        }
+        return {};
+    }
+
+    static QStringList daemonServiceCommand() {
+        const bool systemd = QDir("/run/systemd/system").exists();
+        const QString manager = QStandardPaths::findExecutable(systemd ? "systemctl" : "rc-service",
+            {"/usr/bin", "/bin", "/usr/sbin", "/sbin"});
+        if (manager.isEmpty() || (!systemd && !QFile::exists("/etc/init.d/radeon-profile-daemon")))
+            return {};
+        return systemd ? QStringList{manager, "start", "radeon-profile-daemon.service"}
+                       : QStringList{manager, "radeon-profile-daemon", "start"};
+    }
+
     static QStringList grabSystemInfo(const QString &cmd) {
-        printf("Running command: %s\n", cmd.toStdString().c_str());
-
-        FILE *pipe = popen(cmd.toStdString().c_str(), "r");
-        if (!pipe) {
-            printf("Failed to start process.\n");
-            return QStringList();
-        }
-
-        char buffer[128];
-        QString output;
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-            output += buffer;
-        }
-
-        pclose(pipe);
-
-        output = output.trimmed();
-        qDebug() << "Error executing command:" << output;
-        //printf("Command output: %s\n", output.toStdString().c_str());
-
-        return output.split('\n');
+        return grabSystemInfo(cmd, QProcessEnvironment::systemEnvironment());
     }
 
     static QStringList grabSystemInfo(const QString &cmd, const QProcessEnvironment &env) {
-        QStringList output;
-
         QProcess process;
-        process.setProcessChannelMode(QProcess::MergedChannels);
         process.setProcessEnvironment(env);
-        process.start(cmd);
-        process.waitForFinished();
-
-        if (process.exitCode() == 0) {
-            QByteArray result = process.readAllStandardOutput();
-            output = QString(result).split('\n', Qt::SkipEmptyParts);
-        } else {
-            qDebug() << "Error executing command:" << cmd;
+        process.start("/bin/sh", {"-c", cmd});
+        if (!process.waitForFinished() || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+            qWarning() << "Error executing command:" << cmd << process.errorString()
+                       << process.readAllStandardError();
         }
 
-        return output;
+        // Keep an empty first entry: existing callers index [0] for absent output.
+        return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed().split('\n');
     }
 
     static ValueUnit getUnitFomValueId(ValueID id) {
@@ -458,6 +500,7 @@ public:
             case ValueID::FAN_SPEED_RPM:
                 return ValueUnit::RPM;
 
+            case ValueID::TEMPERATURE_HOTSPOT:
             case ValueID::TEMPERATURE_BEFORE_CURRENT:
             case ValueID::TEMPERATURE_CURRENT:
             case ValueID::TEMPERATURE_MAX:
@@ -486,6 +529,7 @@ public:
             case ValueID::GPU_USAGE_PERCENT:
             case ValueID::GPU_VRAM_USAGE_PERCENT:
             case ValueID::FAN_SPEED_RPM:
+            case ValueID::TEMPERATURE_HOTSPOT:
             case ValueID::TEMPERATURE_CURRENT:
             case ValueID::TEMPERATURE_MAX:
             case ValueID::TEMPERATURE_MIN:
@@ -509,6 +553,7 @@ public:
             case ValueID::GPU_USAGE_PERCENT:  return QObject::tr("GPU usage");
             case ValueID::GPU_VRAM_USAGE_PERCENT:  return QObject::tr("GPU Vram usage");
             case ValueID::FAN_SPEED_RPM:  return QObject::tr("Fan speed RPM");
+            case ValueID::TEMPERATURE_HOTSPOT: return QObject::tr("Hotspot temperature");
             case ValueID::TEMPERATURE_CURRENT:  return QObject::tr("Temperature");
             case ValueID::TEMPERATURE_MAX: return QObject::tr("Temperature (max)");
             case ValueID::TEMPERATURE_MIN: return QObject::tr("Temperature (min)");
@@ -532,6 +577,7 @@ public:
             case ValueID::GPU_USAGE_PERCENT:  return QObject::tr("GPU usage [%]");
             case ValueID::GPU_VRAM_USAGE_PERCENT:  return QObject::tr("GPU Vram usage [%]");
             case ValueID::FAN_SPEED_RPM:  return QObject::tr("Fan speed [rpm]");
+            case ValueID::TEMPERATURE_HOTSPOT: return QObject::tr("Hotspot temperature [°C]");
             case ValueID::TEMPERATURE_CURRENT:  return QObject::tr("Temperature [")+QString::fromUtf8("\u00B0C]");
             case ValueID::TEMPERATURE_MAX: return QObject::tr("Temperature (max) [")+QString::fromUtf8("\u00B0C]");
             case ValueID::TEMPERATURE_MIN: return QObject::tr("Temperature (min) [")+QString::fromUtf8("\u00B0C]");

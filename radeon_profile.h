@@ -21,14 +21,15 @@
 #include <QListWidgetItem>
 #include <QButtonGroup>
 #include <QXmlStreamWriter>
+#include <QSet>
 
 #define minFanStepTemperature 0
-#define maxFanStepTemperature 100
+#define maxFanStepTemperature 120
 
 #define minFanStepSpeed 0
 #define maxFanStepSpeed 100
 
-#define appVersion 20240101
+#define appVersion 20261006
 
 namespace Ui {
 class radeon_profile;
@@ -66,6 +67,7 @@ public:
     static DaemonComm dcomm;
 
 private slots:
+    void enablePrivilegedControls();
     void mainTimerEvent();
     void iconActivated(QSystemTrayIcon::ActivationReason reason);
     void resetMinMax();
@@ -104,6 +106,7 @@ private slots:
     void on_btn_removeFanStep_clicked();
     void on_list_fanSteps_itemDoubleClicked(QTreeWidgetItem *item, int column);
     void on_btn_applyStatesAndOc_clicked();
+    void on_cb_hotspotFanControl_toggled(bool checked);
     void on_btn_applyFanProfile_clicked();
     void on_btn_removeFanProfile_clicked();
     void on_btn_saveFanProfile_clicked();
@@ -159,17 +162,19 @@ private:
     QList<ExecBin*> execsRunning;
     FanProfileSteps currentFanProfile;
     QMap<QString, FanProfileSteps> fanProfiles;
+    QSet<QString> hotspotFanProfiles;
+    bool currentFanProfileHotspot = false;
     QMap<QString, OCProfile> ocProfiles;
     QMap<QString, RPEvent> events;
     QMap<QString, unsigned int> pmStats;
     unsigned int counter_ticks, counter_statsTick;
-    short hysteresisRelativeTepmerature;
+    float lastFanTemperature;
     bool enableChangeEvent, rootMode;
     QButtonGroup group_pwm, group_profileControlButtons;
     CurrentStateInfo *savedState;
     PlotManager plotManager;
     TopbarManager topbarManager;
-    QChartView *chartView_fan, *chartView_oc;
+    QChartView *chartView_fan = nullptr, *chartView_oc;
     QList<TopbarItem*> topBarItems;
     QList<ValueID> keysInCurrentGpuList;
     QString enabledFrequencyStatesCore, enabledFrequencyStatesMem;

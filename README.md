@@ -1,93 +1,69 @@
-# Radeon-Profile-Qt6
-Simple Qt6 application to read current clocks of ATi Radeon cards (xf86-video-ati, xf86-video-amdgpu driver).
+# Radeon Profile (Qt6)
 
-# Requires: 
-Install Qt6 version and run radeon-profile-daemon (*radeon-profile: https://github.com/blackPantherOS/radeon-profile-daemon) for using this app as normal user. Otherwise app need to be run with root privilages for changing power profiles (and clocks readings sometimes). You can add `username ALL = NOPASSWD: /usr/bin/radeon-profile` to your `/etc/sudoers`. Here is tip for run app as normal user but involves change permissions to system files: http://bit.ly/1dvQMhS /This not requires under blackPanther OS, the normal rpm install autoconfig works/
+Linux GUI for monitoring AMD Radeon/amdgpu GPUs and controlling power profiles, clocks and fans. Version: **20261006**.
 
-# Functionality
+## Build
 
-* Monitoring of basic GPU parameters (frequencies, voltages, usage, temperature, fan speed)
-* DPM profiles and power levels
-* Fan control (HD 7000+), definition of multiple custom curves or fixed speed
-* Overclocking (amdgpu) (Wattman, Overdrive, PowerPlay etc)
-* Per app profiles/Event definitions (i.e. change fan profile when temp above defined or set DPM to high when selected binary executed)
-* Define binaries to run with set of environment variablees (i.e. GALLIUM_HUD, MESA, LIBGL etc)
+Requires CMake >= 3.22, a C++17 compiler, Qt6 Widgets/Network/Charts/Concurrent, libX11, libXrandr, libdrm headers and pkg-config. Qt6 LinguistTools is optional for building translations.
 
-# Dependencies
-
-* Qt 6 >= (qt6-base and qt6-charts) 
- /On Redhat based distro: `qt6-qtbase-devel qt6-qtcharts-devel`
- /On Debian/Ubuntu: `qt6-default libqt6charts6-dev`/
-* libxrandr
-* libdrm >= 2.6.116 (for amdgpu, more recent, the better)
-* recent kernel (for amdgpu 4.12<=, more recent, the better)
-* radeon card
-
-For full functionality:
-* glxinfo - info about OpenGL, mesa
-* xdriinfo - driver info
-* xrandr - connected displays
-
-# Install on blackPanther OS
-Automatic driver, daemon, application install method:
-```
-installing radeon-profile
-```
-# Other Installation method
-### Ubuntu 
-Available Qt5 version for Ubuntu from PPA [stable](https://launchpad.net/~radeon-profile/+archive/ubuntu/stable) and [git develop](https://launchpad.net/~radeon-profile/+archive/ubuntu/radeon-profile) repository
-
-Add in terminal commands:
-
-* For git ppa: 
-```
-sudo add-apt-repository ppa:radeon-profile/radeon-profile
-```
-* For stable ppa: 
-```
-sudo add-apt-repository ppa:radeon-profile/stable
-```
-* Then run commands:
-```
-sudo apt update
-sudo apt install radeon-profile
-```
-# Build from Source
-
-```
-git clone https://github.com/blackPantherOS/radeon-profile-qt6.git
-cd radeon-profile/radeon-profile
-qmake-qt6
-make 
+```sh
+git clone https://github.com/adeliktas/radeon-profile-qt6.git
+cd radeon-profile-qt6
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build build -j"$(nproc)"
+./build/radeon-profile
 ```
 
-The resulting binary is `./target/radeon-profile`
+Install the GUI, desktop entry, icon and available translations:
 
-For Ubuntu 2x.xx, qt6-charts isn't available:
-* Use `qtchooser -l` to list available profiles
-* Use `qmake -qt=[profile from qtchooser]` to specify Qt root or download and install a Qt bundle from https://www.qt.io/download-open-source/#section-2
-* Make a `qt6opt.conf` in `/usr/lib/x86_64-linux-gnu/qtchooser/` containing:
-
+```sh
+sudo cmake --install build
 ```
-/opt/Qt6.6.0/6.6.0/gcc_64/bin
-/opt/Qt6.6.0/6.6.0
+
+The binary is **`build/radeon-profile`**. Prefer your distribution's package manager: manual installation bypasses Gentoo's package tracking and can be overwritten by emerge.
+
+## Permissions and service managers
+
+Monitoring does not require root or the daemon when DRM devices and sysfs readings are accessible. Ensure your account has access to the appropriate DRM render node (commonly via the `render` and/or `video` group).
+
+Changing power, clocks or fan settings normally needs the separate [radeon-profile-daemon](https://github.com/blackPantherOS/radeon-profile-daemon). Install its service for your init system:
+
+```sh
+# OpenRC
+sudo rc-service radeon-profile-daemon start
+# Optional: start on boot
+sudo rc-update add radeon-profile-daemon default
+
+# systemd
+sudo systemctl start radeon-profile-daemon.service
+# Optional: start on boot
+sudo systemctl enable radeon-profile-daemon.service
 ```
-### Arch Linux 
-* AUR Qt5 package : https://aur.archlinux.org/packages/radeon-profile-git/
-* System daemon AUR package: https://aur.archlinux.org/packages/radeon-profile-daemon-git/
-# Old Links
 
-* System daemon: https://github.com/marazmista/radeon-profile-daemon
-* Sort of official thread: http://phoronix.com/forums/showthread.php?83602-radeon-profile-tool-for-changing-profiles-and-monitoring-some-GPU-parameters
+Alternatively, choose **General → Enable privileged controls…**. The GUI detects the running init system and invokes its service manager through `pkexec` to show the system authentication dialog. Cancelling leaves monitoring running. Install pkexec and a desktop polkit authentication agent for this feature. The GUI remains unprivileged; do not loosen sysfs permissions or run the entire desktop application as root.
 
-# New icon
- 
-* New icon plan created by Charles K Barcza <kbarcza@blackpanther.hu> 
-<img src="extra/radeon-profile.png" width="100">
+This repository builds the GUI, not the daemon or its service files. Systems without OpenRC/systemd can still monitor GPUs and connect to a daemon started by their administrator.
 
-# Qt6 Screenshot
+## Fan curves
 
-Main screen
-![Main screen](extra/radeon-profile-qt6.png)
-[More Qt6 screenshots](extra/)
-[More Qt5 screenshots](http://imgur.com/a/DMRr9)
+On the Fan Control tab, select a profile and check **Use hotspot (junction) temperature for this curve** to use the GPU's junction sensor instead of its edge sensor. This is saved per profile; older profiles keep using edge temperature. The checkbox is disabled if no readable junction sensor exists. Hotspot is also available in monitoring data.
+
+Drag an existing graph point to adjust its temperature and fan speed; the table updates immediately. Points cannot cross neighbouring temperatures or make fan speed decrease along the curve. Supported points: 0–120°C and 0–100% fan speed.
+
+Edits are marked unsaved. **Save**, then **Apply** to activate another profile. Saving an already active profile updates its control immediately. If the selected sensor becomes unreadable, automatic fan control is restored. Quit through the tray menu to restore automatic control; killing or crashing the GUI can leave the last manual fan setting active.
+
+## Display information
+
+GPU monitoring and fan control use DRM/sysfs, not X11. Detailed display/connector information still uses Xrandr and can be incomplete under Wayland/Xwayland. `glxinfo` and `xdriinfo` are optional diagnostic tools; their absence does not prevent GPU detection. Mesa's `DRI_PRIME` selection uses the GPU's PCI address rather than assuming card/render indices match.
+
+## Checks
+
+```sh
+ctest --test-dir build --output-on-failure
+# Hardware smoke check: AMD GPU, unprivileged user, daemon stopped
+sh tests/monitoring.sh "$PWD/build/radeon-profile"
+```
+
+Tests cover command execution, service-manager selection on the running system, render-node discovery, hotspot discovery/read failures, fan interpolation and graph dragging.
+
+Licensed under GPL-2. See `LICENSE`. Based on the original [radeon-profile](https://github.com/marazmista/radeon-profile) and the blackPantherOS Qt6 port.

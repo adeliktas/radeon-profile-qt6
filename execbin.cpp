@@ -6,6 +6,8 @@
 
 #include <QLabel>
 #include <QFileDialog>
+#include <QSaveFile>
+#include <QMessageBox>
 
 ExecBin::ExecBin() : QObject(),
     tab(new QWidget()),
@@ -80,11 +82,12 @@ void ExecBin::execProcesStart() {
 
 void ExecBin::execProcesFinished() {
     if (!this->logData.logFilename.isEmpty() && this->logData.log.count() > 0) {
-        QFile f(logData.logFilename);
-        f.open(QIODevice::WriteOnly);
-        f.write(this->logData.log.join("\n").toLatin1());
-        f.close();
-        this->logData.log.clear();
+        QSaveFile file(logData.logFilename);
+        const QByteArray data = logData.log.join("\n").toUtf8();
+        if (file.open(QIODevice::WriteOnly) && file.write(data) == data.size() && file.commit())
+            logData.log.clear();
+        else
+            QMessageBox::warning(tab, tr("Save failed"), file.errorString());
     }
 
     this->lStatus->setText(tr("Process state: not running"));
@@ -93,10 +96,10 @@ void ExecBin::execProcesFinished() {
 void ExecBin::saveToFile() {
         QString filename = QFileDialog::getSaveFileName(nullptr, tr("Save"), QDir::homePath()+"/output_"+this->name);
         if (!filename.isEmpty()) {
-            QFile f(filename);
-            f.open(QIODevice::WriteOnly);
-            f.write(this->output->toPlainText().toLatin1());
-            f.close();
+            QSaveFile file(filename);
+            const QByteArray data = output->toPlainText().toUtf8();
+            if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit())
+                QMessageBox::warning(tab, tr("Save failed"), file.errorString());
         }
 }
 

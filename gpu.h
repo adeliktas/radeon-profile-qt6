@@ -22,6 +22,7 @@ public:
     }
 
     ~gpu() {
+        futureGpuUsage.waitForFinished();
         if (driverHandler != nullptr)
             delete driverHandler;
     }
@@ -30,7 +31,7 @@ public:
     GPUDataContainer gpuData;
     QList<GPUSysInfo> gpuList;
 
-    char currentGpuIndex;
+    int currentGpuIndex;
     QString currentPowerProfile, currentPowerLevel;
 
     QList<QTreeWidgetItem *> getCardConnectors() const;
@@ -75,6 +76,8 @@ public:
 
 private slots:
     void handleGpuUsageResult() {
+        if (gpuUsageIndex != currentGpuIndex)
+            return;
         GPUUsage tmp = futureGpuUsage.result();
 
         if (gpuData.contains(ValueID::GPU_USAGE_PERCENT))
@@ -92,6 +95,7 @@ private:
     dXorg *driverHandler;
     void defineAvailableDataContainer();
     QFutureWatcher<GPUUsage> futureGpuUsage;
+    int gpuUsageIndex = -1;
 
 };
 

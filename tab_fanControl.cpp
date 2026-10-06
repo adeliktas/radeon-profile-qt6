@@ -5,6 +5,7 @@
 
 #include <QMessageBox>
 #include <QMenu>
+#include <QSignalBlocker>
 
 void radeon_profile::createDefaultFanProfile() {
     FanProfileSteps p;
@@ -18,30 +19,37 @@ void radeon_profile::createFanProfileListaAndGraph(const QString &profileName) {
     auto profile = fanProfiles.value(profileName);
     auto series = static_cast<QLineSeries*>(chartView_fan->chart()->series()[0]);
 
+    const QSignalBlocker blocker(ui->cb_hotspotFanControl);
+    ui->cb_hotspotFanControl->setChecked(hotspotFanProfiles.contains(profileName));
+    markFanProfileUnsaved(false);
     series->clear();
     ui->list_fanSteps->clear();
+    if (profile.isEmpty())
+        return;
 
-    series->append(0, profile.first());
+    series->append(minFanStepTemperature, profile.first());
 
     for (int temperature : profile.keys()) {
         series->append(temperature, profile.value(temperature));
         ui->list_fanSteps->addTopLevelItem(new QTreeWidgetItem(QStringList() << QString::number(temperature) << QString::number(profile.value(temperature))));
     }
 
-    series->append(100, profile.last());
+    series->append(maxFanStepTemperature, profile.last());
 }
 
 void radeon_profile::makeFanProfilePlot() {
     auto series = static_cast<QLineSeries*>(chartView_fan->chart()->series()[0]);
     series->clear();
+    if (ui->list_fanSteps->topLevelItemCount() == 0)
+        return;
 
-    series->append(0, ui->list_fanSteps->topLevelItem(0)->text(1).toInt());
+    series->append(minFanStepTemperature, ui->list_fanSteps->topLevelItem(0)->text(1).toInt());
 
     for (int i = 0; i < ui->list_fanSteps->topLevelItemCount(); ++i)
         series->append(ui->list_fanSteps->topLevelItem(i)->text(0).toInt(), ui->list_fanSteps->topLevelItem(i)->text(1).toInt());
 
 
-    series->append(100, ui->list_fanSteps->topLevelItem(ui->list_fanSteps->topLevelItemCount() - 1)->text(1).toInt());
+    series->append(maxFanStepTemperature, ui->list_fanSteps->topLevelItem(ui->list_fanSteps->topLevelItemCount() - 1)->text(1).toInt());
 }
 
 void radeon_profile::addFanStep(const unsigned int temperature, const unsigned int fanSpeed) {
@@ -71,6 +79,10 @@ void radeon_profile::addFanStep(const unsigned int temperature, const unsigned i
     makeFanProfilePlot();
 }
 
+void radeon_profile::on_cb_hotspotFanControl_toggled(bool) {
+    markFanProfileUnsaved(true);
+}
+
 void radeon_profile::markFanProfileUnsaved(bool unsaved) {
     ui->l_fanProfileUnsavedIndicator->setVisible(unsaved);
 }
@@ -85,6 +97,7 @@ void radeon_profile::on_btn_removeFanProfile_clicked()
     if (!askConfirmation("", tr("Remove profile: ")+ui->combo_fanProfiles->currentText()+"?"))
         return;
 
+    hotspotFanProfiles.remove(ui->combo_fanProfiles->currentText());
     fanProfiles.remove(ui->combo_fanProfiles->currentText());
     ui->combo_fanProfiles->removeItem(ui->combo_fanProfiles->currentIndex());
     createFanProfilesMenu(true);
@@ -96,11 +109,21 @@ void radeon_profile::on_btn_saveFanProfile_clicked()
 {
     markFanProfileUnsaved(false);
     const auto fanProfile = stepsListToMap();
-    fanProfiles.insert(ui->combo_fanProfiles->currentText(), fanProfile);
+    const QString name = ui->combo_fanProfiles->currentText();
+    fanProfiles.insert(name, fanProfile);
+    if (ui->cb_hotspotFanControl->isChecked())
+        hotspotFanProfiles.insert(name);
+    else
+        hotspotFanProfiles.remove(name);
     saveConfig();
 
-    if (ui->combo_fanProfiles->currentText() == ui->l_currentFanProfile->text())
+    if (name == ui->l_currentFanProfile->text()) {
         currentFanProfile = fanProfile;
+        currentFanProfileHotspot = hotspotFanProfiles.contains(name);
+        lastFanTemperature = -1;
+        if (ui->btn_pwmProfile->isChecked())
+            adjustFanSpeed();
+    }
 }
 
 void radeon_profile::on_btn_saveAsFanProfile_clicked()
@@ -118,6 +141,8 @@ void radeon_profile::on_btn_saveAsFanProfile_clicked()
     markFanProfileUnsaved(false);
 
     fanProfiles.insert(name, stepsListToMap());
+    if (ui->cb_hotspotFanControl->isChecked())
+        hotspotFanProfiles.insert(name);
     ui->combo_fanProfiles->addItem(name);
     ui->combo_fanProfiles->setCurrentText(name);
     createFanProfilesMenu(true);
@@ -181,6 +206,9 @@ void radeon_profile::setCurrentFanProfile(const QString &profileName) {
     ui->btn_fanControl->menu()->actions()[findCurrentMenuIndex(ui->btn_fanControl->menu(), profileName)]->setChecked(true);
 
     currentFanProfile = profile;
+    currentFanProfileHotspot = hotspotFanProfiles.contains(profileName);
+    lastFanTemperature = -1;
+    device.getTemperature();
     adjustFanSpeed();
 }
 
@@ -236,14 +264,10 @@ void radeon_profile::on_btn_addFanStep_clicked()
 void radeon_profile::on_btn_removeFanStep_clicked()
 {
     // at least one element must stay
-    if (ui->list_fanSteps->topLevelItemCount() == 1)
+    if (ui->list_fanSteps->topLevelItemCount() <= 1 || !ui->list_fanSteps->currentItem())
         return;
 
     QTreeWidgetItem *current = ui->list_fanSteps->takeTopLevelItem(ui->list_fanSteps->currentIndex().row());
-
-    // The selected item can be removed, remove it
-    currentFanProfile.remove(current->text(0).toInt());
-    adjustFanSpeed();
 
     // Remove the step from the list and from the graph
     delete current;

@@ -5,7 +5,7 @@
 #include <cstdio> // perror()
 
 #ifndef NO_IOCTL // Include libdrm headers only if NO_IOCTL is not defined
-#  include <libdrm/radeon_drm.h> // radeon ioctl codes and structs
+#  include <radeon_drm.h> // radeon ioctl codes and structs
 #endif
 
 

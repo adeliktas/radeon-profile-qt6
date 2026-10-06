@@ -27,6 +27,10 @@
 #include <QDateTime>
 #include <QMessageBox>
 #include <QDebug>
+#include <QStandardPaths>
+#include <QStatusBar>
+#include <cmath>
+#include <unistd.h>
 
 DaemonComm radeon_profile::dcomm;
 
@@ -37,7 +41,7 @@ radeon_profile::radeon_profile(QWidget *parent) :
     timer(new QTimer(this)),
     counter_ticks(0),
     counter_statsTick(0),
-    hysteresisRelativeTepmerature(0),
+    lastFanTemperature(-1),
     enableChangeEvent(false),
     savedState(nullptr),
     ui(new Ui::radeon_profile)
@@ -46,12 +50,16 @@ radeon_profile::radeon_profile(QWidget *parent) :
 
     connect(dcomm.getSocketPtr(), SIGNAL(connected()), this, SLOT(daemonConnected()));
     connect(dcomm.getSocketPtr(), SIGNAL(disconnected()), this, SLOT(daemonDisconnected()));
+    connect(dcomm.getSocketPtr(), &QLocalSocket::errorOccurred, this, [this](QLocalSocket::LocalSocketError) {
+        if (!device.isInitialized())
+            initializeDevice(); // Monitoring does not require the privileged daemon.
+    });
 
     loadConfig();
     setupUiElements();
 
     // checks if running as root
-    if (globalStuff::grabSystemInfo("whoami")[0] == "root") {
+    if (geteuid() == 0) {
         rootMode = true;
         ui->label_rootWarrning->setVisible(true);
 
@@ -91,6 +99,37 @@ void radeon_profile::initializeDevice() {
     timer->start();
 }
 
+void radeon_profile::enablePrivilegedControls() {
+    if (rootMode || dcomm.isConnected())
+        return;
+
+    const QString pkexec = QStandardPaths::findExecutable("pkexec");
+    const QStringList command = globalStuff::daemonServiceCommand();
+    if (pkexec.isEmpty() || command.isEmpty()) {
+        QMessageBox::warning(this, tr("Privileged controls"),
+            tr("Install pkexec and the radeon-profile-daemon service for your init system (OpenRC or systemd)."));
+        return;
+    }
+
+    auto *process = new QProcess(this);
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QMessageBox::warning(this, tr("Privileged controls"), process->errorString());
+            process->deleteLater();
+        }
+    });
+    connect(process, &QProcess::finished, this, [this, process](int code, QProcess::ExitStatus status) {
+        if (status == QProcess::NormalExit && code == 0)
+            dcomm.connectToDaemon();
+        else
+            QMessageBox::warning(this, tr("Privileged controls"),
+                tr("Authentication was cancelled or the daemon could not be started.\n")
+                + QString::fromLocal8Bit(process->readAllStandardError()));
+        process->deleteLater();
+    });
+    process->start(pkexec, command);
+}
+
 void radeon_profile::daemonConnected() {
     qDebug() << "Daemon connected";
 
@@ -102,6 +141,11 @@ void radeon_profile::daemonConnected() {
 
     } else {
 
+        if (!device.getDriverFeatures().isChangeProfileAvailable) {
+            configureDaemonPreDeviceInit();
+            gpuChanged();
+            configureDaemonPostDeviceInit();
+        }
         enableUiControls(true);
         restoreFanState();
     }
@@ -140,16 +184,16 @@ void radeon_profile::configureDaemonPostDeviceInit() {
 void radeon_profile::connectSignals()
 {
     // fix for warrning: QMetaObject::connectSlotsByName: No matching signal for...
-    connect(ui->combo_gpus,SIGNAL(currentIndexChanged(QString)),this,SLOT(gpuChanged()));
+    connect(ui->combo_gpus, &QComboBox::currentIndexChanged, this, &radeon_profile::gpuChanged);
     connect(ui->combo_pLevel,SIGNAL(currentIndexChanged(int)),this,SLOT(setPowerLevelFromCombo()));
     connect(timer,SIGNAL(timeout()),this,SLOT(mainTimerEvent()));
-    connect(ui->combo_fanProfiles, SIGNAL(currentIndexChanged(const QString&)), this, SLOT(createFanProfileListaAndGraph(const QString&)));
-    connect(ui->combo_ocProfiles, SIGNAL(currentIndexChanged(const QString&)), this, SLOT(createOcProfileListsAndGraph(const QString&)));
+    connect(ui->combo_fanProfiles, &QComboBox::currentTextChanged, this, &radeon_profile::createFanProfileListaAndGraph);
+    connect(ui->combo_ocProfiles, &QComboBox::currentTextChanged, this, &radeon_profile::createOcProfileListsAndGraph);
     connect(ui->slider_powerCap, SIGNAL(valueChanged(int)), this, SLOT(powerCapValueChange(int)));
     connect(ui->spin_powerCap, SIGNAL(valueChanged(int)), this, SLOT(powerCapValueChange(int)));
     connect(ui->group_oc, SIGNAL(toggled(bool)), this, SLOT(percentOverclockToggled(bool)));
     connect(ui->group_freq, SIGNAL(toggled(bool)), this, SLOT(frequencyControlToggled(bool)));
-    connect(&group_profileControlButtons, SIGNAL(buttonClicked(int)), this, SLOT(setPowerProfile(int)));
+    connect(&group_profileControlButtons, &QButtonGroup::idClicked, this, &radeon_profile::setPowerProfile);
 }
 
 void radeon_profile::setupDeviceDependantUiElements()
@@ -208,8 +252,13 @@ void radeon_profile::setupUiEnabledFeatures(const DriverFeatures &features, cons
         ui->tw_main->setTabEnabled(1,false);
 
     ui->group_cfgDaemon->setEnabled(dcomm.isConnected());
-
+    if (!features.isChangeProfileAvailable)
+        statusBar()->showMessage(tr("Monitoring only. Use General → Enable privileged controls… to authenticate for fan and power control."));
+    else
+        statusBar()->clearMessage();
     createCurrentGpuDataListItems();
+
+    ui->cb_hotspotFanControl->setEnabled(data.contains(ValueID::TEMPERATURE_HOTSPOT));
 
     // SETUP FAN CONTROL
     if (features.isFanControlAvailable && features.isChangeProfileAvailable) {
@@ -448,9 +497,11 @@ void radeon_profile::updateExecLogs() {
 
 void radeon_profile::enableUiControls(bool enable)
 {
-    ui->tw_main->setTabEnabled(2, enable);
-    ui->tw_main->setTabEnabled(3, enable);
-    ui->widget_pmControls->setEnabled(enable);
+    const bool writable = enable && device.isInitialized() && device.getDriverFeatures().isChangeProfileAvailable;
+    ui->tw_main->setTabEnabled(2, writable && (device.getDriverFeatures().isOcTableAvailable
+        || device.getDriverFeatures().isPercentCoreOcAvailable || device.getDriverFeatures().isDpmCoreFreqTableAvailable));
+    ui->tw_main->setTabEnabled(3, writable && device.getDriverFeatures().isFanControlAvailable);
+    ui->widget_pmControls->setEnabled(writable);
 }
 
 void radeon_profile::mainTimerEvent() {
@@ -495,47 +546,21 @@ void radeon_profile::mainTimerEvent() {
 }
 
 void radeon_profile::adjustFanSpeed() {
-    if (device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value == device.gpuData.value(ValueID::TEMPERATURE_BEFORE_CURRENT).value)
+    if (!ui->btn_pwmProfile->isChecked() || !device.getDriverFeatures().isChangeProfileAvailable)
         return;
-
-    if (device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value < device.gpuData.value(ValueID::TEMPERATURE_BEFORE_CURRENT).value &&
-            ui->spin_hysteresis->value() > (hysteresisRelativeTepmerature - device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value))
-        return;
-
-    hysteresisRelativeTepmerature = device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value;
-
-    // exact match
-    if (currentFanProfile.contains(device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value)) {
-        device.setPwmValue(currentFanProfile.value(device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value));
+    const auto sensor = currentFanProfileHotspot ? ValueID::TEMPERATURE_HOTSPOT : ValueID::TEMPERATURE_CURRENT;
+    const float temperature = device.gpuData.value(sensor).value;
+    if (temperature < 0 || !std::isfinite(temperature) || currentFanProfile.isEmpty()) {
+        on_btn_pwmAuto_clicked();
+        statusBar()->showMessage(tr("Fan curve sensor unavailable. Restored automatic fan control."));
         return;
     }
-
-    // below first step
-    if (device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value <= currentFanProfile.firstKey()) {
-        device.setPwmValue(currentFanProfile.first());
+    if (temperature == lastFanTemperature || (temperature < lastFanTemperature
+            && lastFanTemperature - temperature < ui->spin_hysteresis->value()))
         return;
-    }
 
-    // above last setep
-    if (device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value >= currentFanProfile.lastKey()) {
-        device.setPwmValue(currentFanProfile.last());
-        return;
-    }
-
-    // find bounds of current temperature
-    auto high = currentFanProfile.upperBound(device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value);
-    auto low = (currentFanProfile.size() > 1 ? high - 1 : high);
-
-    int hSpeed = high.value(),
-            lSpeed = low.value();
-
-    // calculate two point stright line equation based on boundaries of current temperature
-    // y = mx + b = (y2-y1)/(x2-x1)*(x-x1)+y1
-    int hTemperature = high.key(),
-            lTemperature = low.key();
-
-    float speed = (float)(hSpeed - lSpeed) / (float)(hTemperature - lTemperature)  * (device.gpuData.value(ValueID::TEMPERATURE_CURRENT).value - lTemperature)  + lSpeed;
-    device.setPwmValue(speed);
+    lastFanTemperature = temperature;
+    device.setPwmValue(fanSpeedAtTemperature(currentFanProfile, temperature));
 }
 
 void radeon_profile::restoreFanState() {

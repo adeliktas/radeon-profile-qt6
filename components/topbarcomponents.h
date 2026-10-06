@@ -239,6 +239,8 @@ public:
             case TopbarItemType::PIE:
                 item = new PieItem(tis.pieMaxValue, tis.primaryValueId, tis.primaryColor, layout->widget());
                 break;
+            default:
+                return;
         }
 
         if (tis.secondaryValueIdEnabled) {

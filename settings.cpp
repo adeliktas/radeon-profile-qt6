@@ -145,6 +145,7 @@ void radeon_profile::saveFanProfiles(QXmlStreamWriter &xml) {
     for (QString k : fanProfiles.keys()) {
         xml.writeStartElement("fanProfile");
         xml.writeAttribute("name", k);
+        xml.writeAttribute("sensor", hotspotFanProfiles.contains(k) ? "hotspot" : "edge");
 
         FanProfileSteps fps = fanProfiles.value(k);
 
@@ -505,6 +506,7 @@ void radeon_profile::loadExecProfile(const QXmlStreamReader &xml) {
 
 void radeon_profile::loadFanProfile(QXmlStreamReader &xml) {
     QString fpName = xml.attributes().value("name").toString();
+    const bool hotspot = xml.attributes().value("sensor") == QLatin1String("hotspot");
 
     FanProfileSteps fps;
     while (xml.readNext()) {
@@ -512,12 +514,14 @@ void radeon_profile::loadFanProfile(QXmlStreamReader &xml) {
             fps.insert(xml.attributes().value("temperature").toString().toInt(),
                        xml.attributes().value("speed").toString().toInt());
 
-        /* if (xml.tokenType() == QXmlStreamReader::EndElement && xml.name() == "fanProfile") {
-            fanProfiles.insert(fpName, fps);
-            return;
-        } */
         if (xml.tokenType() == QXmlStreamReader::EndElement && xml.name().toString() == QLatin1String("fanProfile")) {
-            fanProfiles.insert(fpName, fps);
+            if (!fps.isEmpty()) {
+                fanProfiles.insert(fpName, fps);
+                if (hotspot)
+                    hotspotFanProfiles.insert(fpName);
+                else
+                    hotspotFanProfiles.remove(fpName);
+            }
             return;
         }
 

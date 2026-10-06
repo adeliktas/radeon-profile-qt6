@@ -34,7 +34,7 @@ public:
 
         InitializationConfig(bool isRoot, bool data, bool autoRefresh) {
             rootMode = isRoot;
-            daemonData = autoRefresh;
+            daemonAutoRefresh = autoRefresh;
             daemonData = data;
         }
     };
@@ -67,6 +67,7 @@ public:
     GPUClocks getClocks();
 
     float getTemperature();
+    float getHotspotTemperature() const { return readHwmonTemperature(driverFiles.hwmonAttributes.hotspot); }
     GPUUsage getGPUUsage();
     GPUFanSpeed getFanSpeed();
 

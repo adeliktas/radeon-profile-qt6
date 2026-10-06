@@ -1,6 +1,7 @@
 #include "radeon_profile.h"
 #include <QApplication>
 #include <QTranslator>
+#include <QStandardPaths>
 
 int main(int argc, char *argv[])
 {
@@ -13,7 +14,8 @@ int main(int argc, char *argv[])
     if (locale.language() != QLocale::Language::English) {
         if (translator.load(locale, "strings", ".")
                 || translator.load(locale, "strings", ".", QApplication::applicationDirPath())
-                || translator.load(locale, "strings", ".", "/usr/share/radeon-profile"))
+                || translator.load(locale, "strings", ".", QStandardPaths::locate(
+                    QStandardPaths::GenericDataLocation, "radeon-profile", QStandardPaths::LocateDirectory)))
 
             a.installTranslator(&translator);
         else

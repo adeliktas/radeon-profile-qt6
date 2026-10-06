@@ -6,7 +6,7 @@
 #include <cmath>
 #include <QFile>
 #include <QDebug>
-//#include <QtConcurrent/QtConcurrent>
+#include <QtConcurrent/QtConcurrent>
 
 extern "C" {
 #include <X11/extensions/Xrandr.h>
@@ -41,111 +41,35 @@ static const char * pnpIdFiles [PNP_ID_FILE_COUNT] = {
 };
 
 
-/* OLD
 void gpu::detectCards() {
-    QStringList out = globalStuff::grabSystemInfo("ls /sys/class/drm/").filter(QRegularExpression("card\\d$"));
-
-    for (int i = 0; i < out.count(); i++) {
-        QFile f("/sys/class/drm/"+out[i]+"/device/uevent");
-
-        if (!f.open(QIODevice::ReadOnly))
+    gpuList.clear();
+    const auto cards = QDir("/sys/class/drm").entryList({"card*"}, QDir::Dirs)
+        .filter(QRegularExpression("^card\\d+$"));
+    for (const QString &card : cards) {
+        QFile file("/sys/class/drm/" + card + "/device/uevent");
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        const auto lines = QString::fromLatin1(file.readAll()).split('\n');
+        const int driver = lines.indexOf(QRegularExpression("^DRIVER=(radeon|amdgpu)$"));
+        if (driver < 0)
             continue;
 
-        QStringList ueventContents = QString(f.readAll()).split('\n');
-        f.close();
-
-        int driverIdx = ueventContents.indexOf(QRegularExpression("DRIVER=[radeon|amdgpu]+"));
-        if (driverIdx == -1)
-            continue;
-
-        GPUSysInfo gsi;
-        gsi.driverModuleString = ueventContents[driverIdx].split('=')[1];
-        if (gsi.driverModuleString == "radeon")
-            gsi.module = DriverModule::RADEON;
-        else if (gsi.driverModuleString == "amdgpu")
-            gsi.module = DriverModule::AMDGPU;
-        else
-            gsi.module = DriverModule::MODULE_UNKNOWN;
-
-        gsi.sysName = gsi.name = out[i];
-
-        int pciIdx = ueventContents.indexOf(QRegularExpression("PCI_SLOT_NAME.+"));
-        if (pciIdx != -1)
-            gsi.name = globalStuff::grabSystemInfo("lspci -s " + ueventContents[pciIdx].split('=')[1])[0].split(':')[2].trimmed();
-
-        gpuList.append(gsi);
-
-        qDebug() << "Card detected:\n module: " << gsi.driverModuleString <<  "\n sysName(path): "  << gsi.sysName  << "\n name: " <<  gsi.name;
-    }
-} 
-*/
-
-void gpu::detectCards() {
-    qDebug() << "Start GPU Detection";
-    
-    QStringList out = globalStuff::grabSystemInfo("ls /sys/class/drm/").filter(QRegularExpression("card\\d$"));
-    qDebug() << "Detected DRM Cards:" << out;
-
-    for (int i = 0; i < out.count(); i++) {
-        qDebug() << "Processing Card:" << out[i];
-
-        QFile f("/sys/class/drm/" + out[i] + "/device/uevent");
-
-        if (!f.open(QIODevice::ReadOnly)) {
-            qDebug() << "Failed to open uevent file for" << out[i];
-            continue;
-        }
-
-        QStringList ueventContents = QString(f.readAll()).split('\n');
-        f.close();
-
-        int driverIdx = -1;
-        for (int j = 0; j < ueventContents.size(); j++) {
-            QRegularExpressionMatch match = QRegularExpression("DRIVER=(radeon|amdgpu)").match(ueventContents[j]);
-            if (match.hasMatch()) {
-                driverIdx = j;
-                break;
+        GPUSysInfo info;
+        info.sysName = info.name = card;
+        info.driverModuleString = lines.at(driver).section('=', 1);
+        info.module = info.driverModuleString == "amdgpu" ? DriverModule::AMDGPU : DriverModule::RADEON;
+        const int pci = lines.indexOf(QRegularExpression("^PCI_SLOT_NAME=.+$"));
+        if (pci >= 0) {
+            info.pciSlot = lines.at(pci).section('=', 1);
+            if (!QStandardPaths::findExecutable("lspci").isEmpty()) {
+                const QString name = globalStuff::grabSystemInfo("lspci -s " + info.pciSlot).value(0).section(": ", 1).trimmed();
+                if (!name.isEmpty())
+                    info.name = name;
             }
         }
-
-        if (driverIdx == -1) {
-            qDebug() << "Driver information not found for" << out[i];
-            continue;
-        }
-
-        GPUSysInfo gsi;
-        gsi.driverModuleString = QRegularExpression("DRIVER=(radeon|amdgpu)").match(ueventContents[driverIdx]).captured(1);
-        qDebug() << "Driver Module for" << out[i] << ":" << gsi.driverModuleString;
-
-        if (gsi.driverModuleString == "radeon")
-            gsi.module = DriverModule::RADEON;
-        else if (gsi.driverModuleString == "amdgpu")
-            gsi.module = DriverModule::AMDGPU;
-        else
-            gsi.module = DriverModule::MODULE_UNKNOWN;
-
-        gsi.sysName = gsi.name = out[i];
-
-        int pciIdx = -1;
-        for (int j = 0; j < ueventContents.size(); j++) {
-            QRegularExpressionMatch match = QRegularExpression("PCI_SLOT_NAME=.+").match(ueventContents[j]);
-            if (match.hasMatch()) {
-                pciIdx = j;
-                break;
-            }
-        }
-
-        if (pciIdx != -1) {
-            gsi.name = globalStuff::grabSystemInfo("lspci -s " + QRegularExpression("PCI_SLOT_NAME=(.+)").match(ueventContents[pciIdx]).captured(1))[0].split(':')[2].trimmed();
-            qDebug() << "PCI Name for" << out[i] << ":" << gsi.name;
-        }
-
-        gpuList.append(gsi);
-
-        qDebug() << "Card detected:\n module:" << gsi.driverModuleString << "\n sysName(path):"  << gsi.sysName  << "\n name:" <<  gsi.name;
+        gpuList.append(info);
+        qDebug() << "Card detected:" << info.sysName << info.driverModuleString << info.name;
     }
-
-    qDebug() << "GPU Detection Completed";
 }
 
 bool gpu::initialize(const dXorg::InitializationConfig &config) {
@@ -169,15 +93,19 @@ bool gpu::isInitialized() {
 }
 
 void gpu::changeGpu(int index) {
+    if (index < 0 || index >= gpuList.size())
+        return;
+    futureGpuUsage.waitForFinished();
     dXorg::InitializationConfig initConfig = driverHandler->getInitConfig();
     delete driverHandler;
 
+    currentGpuIndex = index;
     driverHandler = new dXorg(gpuList.at(index), initConfig);
-    driverHandler->configure();
     defineAvailableDataContainer();
 }
 
 void gpu::defineAvailableDataContainer() {
+    gpuData.clear();
     GPUClocks tmpClk = driverHandler->getClocks();
 
     if (tmpClk.coreClk != -1)
@@ -219,6 +147,10 @@ void gpu::defineAvailableDataContainer() {
         gpuData.insert(ValueID::TEMPERATURE_MIN, RPValue(ValueUnit::CELSIUS, tmpTemp));
         gpuData.insert(ValueID::TEMPERATURE_MAX, RPValue(ValueUnit::CELSIUS, tmpTemp));
     }
+
+    const float hotspot = driverHandler->getHotspotTemperature();
+    if (hotspot >= 0)
+        gpuData.insert(ValueID::TEMPERATURE_HOTSPOT, RPValue(ValueUnit::CELSIUS, hotspot));
 
     GPUUsage tmpUsage = driverHandler->getGPUUsage();
 
@@ -271,6 +203,8 @@ void gpu::getClocks() {
 }
 
 void gpu::getTemperature() {
+    if (gpuData.contains(ValueID::TEMPERATURE_HOTSPOT))
+        gpuData[ValueID::TEMPERATURE_HOTSPOT].setValue(driverHandler->getHotspotTemperature());
     if (!gpuData.contains(ValueID::TEMPERATURE_CURRENT))
         return;
 
@@ -284,34 +218,11 @@ void gpu::getTemperature() {
         gpuData[ValueID::TEMPERATURE_MAX].setValue(gpuData.value(ValueID::TEMPERATURE_CURRENT).value);
 }
 
-/* void gpu::getGpuUsage() {
-
-    // getting gpu usage seems to be heavy and cause ui lag, so it is done in another thread
-    futureGpuUsage.setFuture(QtConcurrent::run(driverHandler,&dXorg::getGPUUsage));
-} */
-
-void gpu::getGpuUsage()
-{
-    // Create a QRunnable object that calls driverHandler->getGPUUsage()
-    class GetGpuUsageRunnable : public QRunnable
-    {
-    public:
-        GetGpuUsageRunnable(dXorg *driverHandler) : m_driverHandler(driverHandler) {}
-
-        void run() override
-        {
-            m_driverHandler->getGPUUsage();
-        }
-
-    private:
-        dXorg *m_driverHandler;
-    };
-
-    // Create an instance of the QRunnable
-    GetGpuUsageRunnable *runnable = new GetGpuUsageRunnable(driverHandler);
-
-    // Use the QThreadPool to run the QRunnable
-    QThreadPool::globalInstance()->start(runnable);
+void gpu::getGpuUsage() {
+    if (!futureGpuUsage.isRunning()) {
+        gpuUsageIndex = currentGpuIndex;
+        futureGpuUsage.setFuture(QtConcurrent::run(&dXorg::getGPUUsage, driverHandler));
+    }
 }
 
 QList<QTreeWidgetItem *> gpu::getModuleInfo() const {
@@ -325,8 +236,13 @@ QStringList gpu::getGLXInfo(QString gpuName) const {
         data << "VGA: " + gpu.name;
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    if (!gpuName.isEmpty())
-        env.insert("DRI_PRIME",gpuName.at(gpuName.length()-1));
+    for (const auto &info : gpuList) {
+        if (info.sysName == gpuName && !info.pciSlot.isEmpty()) {
+            QString slot = info.pciSlot;
+            env.insert("DRI_PRIME", "pci-" + slot.replace(':', '_').replace('.', '_'));
+            break;
+        }
+    }
     QStringList driver = globalStuff::grabSystemInfo("xdriinfo",env).filter("Screen 0:",Qt::CaseInsensitive);
     if (!driver.isEmpty())  // because of segfault when no xdriinfo
         data << "OpenGL driver:"+ driver.filter("Screen 0:",Qt::CaseInsensitive)[0].split(":",Qt::SkipEmptyParts)[1];
@@ -491,13 +407,14 @@ void gpu::setOcTable(const QString &tableType, const FVTable &table) {
 QString translateProperty(Display * display,
                                  const int propertyDataFormat, // 8 / 16 / 32 bit
                                  const Atom propertyDataType, // ATOM / INTEGER / CARDINAL
-                                 const Atom * propertyRawData){ // Pointer to the property value data array
+                                 const void * propertyRawData){ // Pointer to one property item
     QString out;
+    const quint64 value = globalStuff::xrandrPropertyValue(propertyRawData, propertyDataFormat);
 
     switch (propertyDataType) {
     case ATOM_VALUE: // Text value, like 'off' or 'None'
         if(propertyDataFormat == 32){ // Only 32 bit supported here
-            char* string = XGetAtomName(display, *propertyRawData);
+            char* string = XGetAtomName(display, value);
             if(string) // If it is not NULL
                 out = QString(string);
             XFree(string);
@@ -506,22 +423,22 @@ QString translateProperty(Display * display,
 
     case INTEGER_VALUE: // Signed numeric value
         switch (propertyDataFormat) {
-            case 8: out = QString::number((qint8) *propertyRawData); break;
-            case 16: out = QString::number((qint16) *propertyRawData); break;
-            case 32: out = QString::number((qint32) *propertyRawData); break;
+            case 8: out = QString::number((qint8) value); break;
+            case 16: out = QString::number((qint16) value); break;
+            case 32: out = QString::number((qint32) value); break;
         }
         break;
 
     case CARDINAL_VALUE: // Unsigned numeric value
         switch (propertyDataFormat) {
-            case 8: out = QString::number((quint8) *propertyRawData); break;
-            case 16: out = QString::number((quint16) *propertyRawData); break;
-            case 32: out = QString::number((quint32) *propertyRawData); break;
+            case 8: out = QString::number((quint8) value); break;
+            case 16: out = QString::number((quint16) value); break;
+            case 32: out = QString::number((quint32) value); break;
         }
             break;
     }
 
-    return out.isEmpty() ? QString::number(*propertyRawData) : out; // If no match was found, return as number
+    return out.isEmpty() ? QString::number(value) : out; // If no match was found, return as number
 }
 
 // Get the real vendor name from the three-letter PNP ID
@@ -765,7 +682,7 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
         addItemToTreeList(screenItem, QObject::tr("Resolution"), screenResolution);
 
         // Add screen minimum and maximum resolutions
-        int screenMinWidth, screenMinHeight, screenMaxWidth, screenMaxHeight;
+        int screenMinWidth = 0, screenMinHeight = 0, screenMaxWidth = 0, screenMaxHeight = 0;
         Window screenRoot = RootWindow(display, screenIndex);
         XRRGetScreenSizeRange(display, screenRoot, &screenMinWidth, &screenMinHeight, &screenMaxWidth, &screenMaxHeight);
 
@@ -935,10 +852,10 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
                 XFree(propertyAtomName);
 
                 // Get the property raw value
-                Atom propertyDataType;
-                int propertyDataFormat;
-                unsigned long propertyDataSize, propertyDataBytesAfter;
-                quint8 * propertyRawData;
+                Atom propertyDataType = None;
+                int propertyDataFormat = 0;
+                unsigned long propertyDataSize = 0, propertyDataBytesAfter = 0;
+                quint8 * propertyRawData = nullptr;
                 XRRGetOutputProperty(display,
                                      screenResources->outputs[outputIndex], // Current output
                                      properties[propertyIndex], // Current property
@@ -949,14 +866,21 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
                                      &propertyDataBytesAfter,
                                      &propertyRawData); // The raw data content of the property
 
+                if (!propertyRawData || (propertyDataFormat != 8 && propertyDataFormat != 16 && propertyDataFormat != 32)) {
+                    XFree(propertyRawData);
+                    continue;
+                }
+
                 // Translate the property value to human readable
                 // http://us.download.nvidia.com/XFree86/Linux-x86-ARM/361.16/README/xrandrextension.html
                 if(propertyName.compare("EDID") == 0){ // EDID found
                     qDebug() << "      Property is EDID, parsing it";
 
                     // See http://en.wikipedia.org/wiki/Extended_display_identification_data#EDID_1.3_data_format
-                    if(propertyDataSize < 128){ // EDID is invalid
+                    if (propertyDataFormat != 8 || !globalStuff::validEdid(QByteArray::fromRawData(
+                            reinterpret_cast<const char*>(propertyRawData), propertyDataSize))) {
                         qWarning() << "EDID is malformed, skipping";
+                        XFree(propertyRawData);
                         continue;
                     }
 
@@ -971,52 +895,11 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
 
                     addItemToTreeList(propertyListItem, propertyName, readableEDID);
 
-                    // Parse the EDID to gather info
-                    const quint8 header[8] = {0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00}; // Fixed EDID header
+                    outputItem->setText(1, QObject::tr("Connected with ") + getMonitorName(propertyRawData));
+                    const quint32 serialNumber = qFromLittleEndian<quint32>(propertyRawData + EDID_OFFSET_SERIAL_NUMBER);
+                    addItemToTreeList(propertyListItem, QObject::tr("Serial number"),
+                        serialNumber ? QString::number(serialNumber) : QObject::tr("Not available"));
 
-                        //if (memcmp(propertyRawData, header, 8) != 0) { // If the header is not valid
-                    if (QByteArray(reinterpret_cast<const char*>(propertyRawData), 8).length() >= 8 && memcmp(propertyRawData, header, 8) != 0) {
-			qWarning() << screenIndex << '/' << outputInfo->name << ": can't parse EDID, invalid header";
-                    } else { // Valid header
-
-            		if (propertyRawData = nullptr) {
-		    
-		    	    qWarning() << "propertyRawData null!";
-
-                          } else {
-
-                    	    if (outputItem) {
-                    	    // Add the monitor name to the tree as value of the Output Item
-                		outputItem->setText(1, QObject::tr("Connected with ") + getMonitorName(propertyRawData));
-                		
-                		//if (propertyRawData.size() >= (EDID_OFFSET_SERIAL_NUMBER + 4)) {
-                		if (sizeof(propertyRawData) >= (EDID_OFFSET_SERIAL_NUMBER + 4)) {
-
-                    	        // Get the serial number
-                    	        // For reference: https://github.com/KDE/libkscreen/blob/master/src/edid.cpp#L288-L295
-                    	            quint32 serialNumber = propertyRawData[EDID_OFFSET_SERIAL_NUMBER];
-                        	    serialNumber += propertyRawData[EDID_OFFSET_SERIAL_NUMBER + 1] * 0x100;
-	                	    serialNumber += propertyRawData[EDID_OFFSET_SERIAL_NUMBER + 2] * 0x10000;
-        	            	    serialNumber += propertyRawData[EDID_OFFSET_SERIAL_NUMBER + 3] * 0x1000000;
-		            	    QString serial = (serialNumber > 0) ? QString::number(serialNumber) : QObject::tr("Not available");
-        	            	    addItemToTreeList(propertyListItem, QObject::tr("Serial number"), serial);
-                    	        
-                    	        } else {
-				    
-				    qWarning() << "propertyRawData too short !";
-				}
-                    	        
-                    	    } else {
-                    	    
-				qWarning() << "outputItem null!";
-			    }
-		    
-			}
-
-                    }
-
-                    //End of EDID
-                
                 } else { //Not EDID
                     // Translate the value ( translateProperty() will handle it)
                     QString propertyValue;
@@ -1024,7 +907,7 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
                         propertyValue += translateProperty(display,
                                                            propertyDataFormat,
                                                            propertyDataType,
-                                                           (Atom*)&propertyRawData[i]);
+                                                           propertyRawData + i * (propertyDataFormat == 32 ? sizeof(unsigned long) : propertyDataFormat / 8));
 
                     // Get the property informations (allows to get ranges)
                     XRRPropertyInfo *propertyInfo = XRRQueryOutputProperty(display,
@@ -1038,7 +921,7 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
 
                         for(int valuesIndex = 0; valuesIndex < propertyInfo->num_values; valuesIndex++){
                             // Until there is another alternative/range available
-                            if(propertyInfo->range) { // This is a range, print the maximum value
+                            if(propertyInfo->range && valuesIndex + 1 < propertyInfo->num_values) { // This is a range, print the maximum value
                                 propertyValue += translateProperty(display,
                                                             32, // Value data has 32-bit format
                                                             propertyDataType,
@@ -1058,14 +941,13 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
 
                         propertyValue += ')';
 
-                        // Property alternatives completed: deallocate propertyInfo
-                        free(propertyInfo);
                     }
+                    XFree(propertyInfo);
                     // Print the property
                     addItemToTreeList(propertyListItem, propertyName, propertyValue);
                 }
                 // Property completed: deallocate the property raw data
-                free(propertyRawData);
+                XFree(propertyRawData);
             }
             // Output completed: deallocate properties, configInfo and outputInfo
             XFree(properties);
@@ -1077,5 +959,6 @@ QList<QTreeWidgetItem *> gpu::getCardConnectors() const {
         XRRFreeScreenResources(screenResources);
     }
 
+    XCloseDisplay(display);
     return cardConnectorsList;
 }

@@ -1448,7 +1448,17 @@
               </property>
              </widget>
             </item>
-            <item row="0" column="4" rowspan="8">
+            <item row="8" column="0" colspan="4">
+             <widget class="QCheckBox" name="cb_hotspotFanControl">
+              <property name="text">
+               <string>Use hotspot (junction) temperature for this curve</string>
+              </property>
+              <property name="toolTip">
+               <string>Saved per profile. Save and apply to change the active control sensor. Unavailable without a readable junction sensor.</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="4" rowspan="9">
              <layout class="QVBoxLayout" name="verticalLayout_22"/>
             </item>
             <item row="7" column="0" colspan="3">

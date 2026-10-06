@@ -6,7 +6,7 @@
 
 #ifndef NO_IOCTL // Include libdrm headers only if NO_IOCTL is not defined
 #  ifndef NO_AMDGPU_IOCTL // Include libdrm amdgpu headers only if NO_AMDGPU_IOCTL is not declared
-#    include <libdrm/amdgpu_drm.h> // amdgpu ioctl codes and structs
+#    include <amdgpu_drm.h> // amdgpu ioctl codes and structs
 #  endif
 #endif
 

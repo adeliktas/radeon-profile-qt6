@@ -8,6 +8,6 @@ Exec=radeon-profile
 Icon=radeon-profile
 Terminal=false
 Type=Application
-Categories=System;Monitor;HardwareSettings;TrayIcon;
+Categories=System;Monitor;HardwareSettings;
 StartupNotify=false
 

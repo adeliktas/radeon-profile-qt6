@@ -1,6 +1,8 @@
 #-------------------------------------------------
 
-QT       += core gui network widgets charts
+QT       += core gui network widgets charts concurrent
+CONFIG += link_pkgconfig
+PKGCONFIG += libdrm
 
 TARGET = radeon-profile
 TEMPLATE = app
@@ -56,6 +58,7 @@ HEADERS  += radeon_profile.h \
     execbin.h \
     rpevent.h \
     ioctlHandler.h \
+    components/fancurvechart.h \
     components/rpplot.h \
     components/pieprogressbar.h \
     components/topbarcomponents.h \

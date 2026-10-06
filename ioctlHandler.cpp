@@ -1,4 +1,5 @@
 #include "ioctlHandler.h"
+#include "globalStuff.h"
 
 #include <QDebug>
 #include <sys/ioctl.h> // ioctl()
@@ -8,7 +9,7 @@
 #include <fcntl.h> // open()
 
 #ifndef NO_IOCTL // Include libdrm headers only if NO_IOCTL is not defined
-#  include <libdrm/drm.h>
+#  include <drm.h>
 #endif
 
 
@@ -20,7 +21,7 @@ int ioctlHandler::openPath(const char *prefix, unsigned index) const {
     char path[PATH_SIZE];
     snprintf(path, PATH_SIZE, "%s%u", prefix, index);
 
-    int res = open(path, O_RDONLY);
+    int res = open(path, O_RDONLY | O_CLOEXEC);
     if(res < 0) // Open failed
         perror(path);
     else
@@ -31,9 +32,9 @@ int ioctlHandler::openPath(const char *prefix, unsigned index) const {
 
 /**
  * Open file descriptor to card device.<br>
- * The kernel generates for the card with index N the files /dev/dri/card<N> and /dev/dri/renderD<128+N>.<br>
+ * Resolve the render node through sysfs: card and render indices need not match.<br>
  * Executing ioctls on /dev/dri/card<N> requires either root access or being DRM Master.<br>
- * /dev/dri/renderD<128+N> does not require these permissions, but legacy kernels (Linux < 3.15) do not support it.<br>
+ * Render nodes do not require these permissions, but legacy kernels (Linux < 3.15) do not support them.<br>
  * This constructor tries to open both (render has the precedence).
  * @see https://en.wikipedia.org/wiki/Direct_Rendering_Manager#DRM-Master_and_DRM-Auth
  * @see https://en.wikipedia.org/wiki/Direct_Rendering_Manager#Render_nodes
@@ -45,9 +46,10 @@ ioctlHandler::ioctlHandler(unsigned card){
     fd = -1;
     Q_UNUSED(card);
 #else
-    fd = openPath("/dev/dri/renderD", 128+card); // Try /dev/dri/renderD<128+N>
-    if(fd < 0) // /dev/dri/renderD<128+N> not available
-        fd = openPath("/dev/dri/card", card); // Try /dev/dri/card<N>
+    const QString renderNode = globalStuff::renderNodeForDevice(QString("/sys/class/drm/card%1/device/drm").arg(card));
+    fd = renderNode.isEmpty() ? -1 : open(QFile::encodeName(renderNode).constData(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        fd = openPath("/dev/dri/card", card);
 #endif
 }
 

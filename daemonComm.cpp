@@ -32,7 +32,8 @@ void DaemonComm::sendConnectionConfirmation() {
 }
 
 void DaemonComm::connectToDaemon() {
-    qDebug() << "Connecting to daemon...";
+    if (signalSender->state() == QLocalSocket::ConnectedState || signalSender->state() == QLocalSocket::ConnectingState)
+        return;
     signalSender->abort();
     signalSender->connectToServer("/run/radeon-profile-daemon-server");
 }
@@ -43,6 +44,8 @@ void DaemonComm::disconnectDaemon() {
 }
 
 void DaemonComm::sendCommand(const QString command) {
+    if (!isConnected() || command.isEmpty())
+        return;
     if (signalSender->write(command.toLatin1(),command.length()) == -1) {// If sending signal fails
         qWarning() << "Failed sending signal: " << command;
         return;
